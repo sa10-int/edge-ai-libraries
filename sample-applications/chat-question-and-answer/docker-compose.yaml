@@ -66,7 +66,21 @@ services:
       - MODEL_ID=${RERANKER_MODEL}
     networks:
       - my_network
+    depends_on:
+      - reranker-init
     command: --model-id ${RERANKER_MODEL} --auto-truncate
+
+  reranker-init:
+    image: curlimages/curl:latest
+    container_name: reranker-init
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "curl -X POST http://<service-name>/download-model/
+      -H 'Content-Type: application/json'
+      -d '{\"model_name\": \"${RERANKER_MODEL}\", \"hf_token\": \"${HUGGINGFACEHUB_API_TOKEN}\" }' &&
+      echo 'Model download completed.'"
+    networks:
+      - my_network
 
   dataprep_pgvector:
     image: ${REGISTRY:-}document-ingestion:1.1.1
@@ -181,7 +195,21 @@ services:
       retries: 3
     networks:
       - my_network
+    depends_on:
+      - llm-init
     command: /bin/bash -c "echo $OTLP_ENDPOINT && echo $OTLP_ENDPOINT_TRACE && pip install 'opentelemetry-sdk>=1.26.0,<1.27.0' 'opentelemetry-api>=1.26.0,<1.27.0' 'opentelemetry-exporter-otlp>=1.26.0,<1.27.0' 'opentelemetry-semantic-conventions-ai>=0.4.1,<0.5.0' opentelemetry-instrumentation-fastapi &&  opentelemetry-instrument python3 -m vllm.entrypoints.openai.api_server --enforce-eager --otlp-traces-endpoint=$OTLP_ENDPOINT_TRACE --model $LLM_MODEL --tensor-parallel-size $TENSOR_PARALLEL_SIZE --host 0.0.0.0 --port 80"
+
+  llm-init:
+    image: curlimages/curl:latest
+    container_name: llm-init
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "curl -X POST http://<service-name>/download-model/
+      -H 'Content-Type: application/json'
+      -d '{\"model_name\": \"${LLM_MODEL}\", \"hf_token\": \"${HUGGINGFACEHUB_API_TOKEN}\", \"is_ovms\": \"${IS_LLM_OVMS}\", \"model_type\": \"llm\" }' &&
+      echo 'Model download completed.'"
+    networks:
+      - my_network
 
   text-generation:
     image: ghcr.io/huggingface/text-generation-inference:3.0.1-intel-xpu
@@ -207,6 +235,8 @@ services:
       retries: 3
     networks:
       - my_network
+    depends_on:
+      - llm-init
     shm_size: "1g"
 
   ovms-service:
@@ -218,11 +248,13 @@ services:
       - no_proxy=${no_proxy}
       - http_proxy=${http_proxy}
       - https_proxy=${https_proxy}
+      - WEIGHT_FORMAT=${WEIGHT_FORMAT}
+      - MODEL_DIRECTORY=${MODEL_DIRECTORY_NAME}
     ports:
       - "9300:9300"
       - "8300:80"
     volumes:
-      - "${VOLUME_OVMS}:/workspace:ro"
+      - "${VOLUME_OVMS}:/workspace/models:ro"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost/v2/health/ready" ]
       interval: 30s
@@ -231,6 +263,8 @@ services:
     command: [ "--port", "9300", "--rest_port", "80", "--log_level", "DEBUG", "--config_path", "workspace/models/config.json" ]
     networks:
       - my_network
+    depends_on:
+      - llm-init
 
   #Embedding Services
   tei-embedding-service:
@@ -245,36 +279,47 @@ services:
     shm_size: 1g
     networks:
       - my_network
+    depends_on:
+      - embedding-init
     environment:
       no_proxy: ${no_proxy}
       http_proxy: ${http_proxy}
       https_proxy: ${https_proxy}
     command: --model-id ${EMBEDDING_MODEL_NAME} --auto-truncate
 
-  ovms-service-gpu:
-    image: openvino/model_server:2025.0-gpu
-    container_name: ovms-service
+  openvino-model-server:
+    image: openvino/model_server:2025.0
     profiles:
-      - GPU-OVMS
-    environment:
-      - no_proxy=${no_proxy}
-      - http_proxy=${http_proxy}
-      - https_proxy=${https_proxy}
+      - OVMS-EMBEDDING
+    container_name: openvino-embedding
     ports:
-      - "9000:9000"
-      - "8300:80"
+      - "8500:80"
+    environment:
+      no_proxy: ${no_proxy}
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
     volumes:
-      - "${VOLUME_OVMS}:/workspace:ro"
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - ${RENDER_DEVICE_GID}
+      - "${VOLUME_OVMS}:/workspace/models:ro"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost/v2/health/ready" ]
       interval: 30s
       timeout: 10s
       retries: 3
-    command: [ "--port", "9000", "--rest_port", "80", "--log_level", "DEBUG", "--config_path", "workspace/models/config.json" ]
+    command: [ "--port", "9000", "--rest_port", "80", "--config_path", "workspace/models/config.json" ]
+    networks:
+      - my_network
+    depends_on:
+      - embedding-init
+
+  embedding-init:
+    image: curlimages/curl:latest
+    container_name: embedding-init
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "curl -X POST http://<service-name>/download-model/
+      -H 'Content-Type: application/json'
+      -d '{\"model_name\": \"${EMBEDDING_MODEL_NAME}\", \"hf_token\": \"${HUGGINGFACEHUB_API_TOKEN}\", \"is_ovms\": \"${IS_EMBEDDING_OVMS}\", \"model_type\": \"embeddings\" }' &&
+      echo 'Model download completed.'"
     networks:
       - my_network
 

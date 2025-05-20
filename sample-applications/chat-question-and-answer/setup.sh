@@ -64,7 +64,8 @@ export KVCACHE_SPACE=50
 # OVMS
 export MODEL_DIRECTORY_NAME=$(basename $LLM_MODEL)
 export WEIGHT_FORMAT=int8
-export VOLUME_OVMS=${PWD}/ovms_config
+export HOME_DIR="~"
+export VOLUME_OVMS=$HOME_DIR/models
 
 #TGI
 #export VOLUME=$PWD/data
@@ -95,6 +96,7 @@ setup_inference() {
                 vllm)
                         export ENDPOINT_URL=http://vllm-service/v1
                         export COMPOSE_PROFILES=VLLM
+                        export IS_LLM_OVMS=false
                         ;;
                 ovms)
                         export ENDPOINT_URL=http://ovms-service/v3
@@ -107,13 +109,12 @@ setup_inference() {
                                 export COMPOSE_PROFILES=OVMS
 
                         fi
-                        cd ./ovms_config
-                        python3 export_model.py text_generation --source_model $LLM_MODEL --weight-format $WEIGHT_FORMAT --config_file_path models/config.json --model_repository_path models --target_device $DEVICE --cache_size $OVMS_CACHE_SIZE --overwrite_models
-                        cd ..
+                        export IS_LLM_OVMS=true
                         ;;
                 tgi)
                         export ENDPOINT_URL=http://text-generation/v1
                         export COMPOSE_PROFILES=TGI
+                        export IS_LLM_OVMS=false
                         ;;
                 *)
                         echo "Invalid Model Server option: $service"
@@ -127,6 +128,7 @@ setup_embedding() {
                 tei)
                         export EMBEDDING_ENDPOINT_URL=http://tei-embedding-service
                         export COMPOSE_PROFILES=$COMPOSE_PROFILES,TEI
+                        export IS_EMBEDDING_OVMS=false
                         ;;
                 ovms)
                         export EMBEDDING_ENDPOINT_URL=http://ovms-service/v3
@@ -137,9 +139,7 @@ setup_embedding() {
                                 export COMPOSE_PROFILES=$COMPOSE_PROFILES,OVMS
 
                         fi
-                        cd ./ovms_config
-                        python3 export_model.py embeddings --source_model $EMBEDDING_MODEL_NAME --weight-format $WEIGHT_FORMAT --config_file_path models/config.json --model_repository_path models --target_device $DEVICE --overwrite_models
-                        cd ..
+                        export IS_EMBEDDING_OVMS=true
                         ;;
                 *)
                         echo "Invalid Embedding Service option: $service"

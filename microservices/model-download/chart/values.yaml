@@ -1,0 +1,12 @@
+replicaCount: 1
+
+image:
+  repository: your-dockerhub-username/model-download
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: NodePort
+  nodePort: 32004
+
+resources: {}
