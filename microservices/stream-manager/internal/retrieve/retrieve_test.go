@@ -250,7 +250,7 @@ func TestFrame(t *testing.T) {
 func TestFrameErrors(t *testing.T) {
 	env := newEnv(t, 0)
 	rec := env.addRecording(t)
-	recording := env.addRecording(t, func(r *model.Recording) { r.State, r.EndTS = "recording", nil })
+	recording := env.addRecording(t, func(r *model.Recording) { r.State = "finalizing" })
 	expired := env.addRecording(t, func(r *model.Recording) { past := time.Now().Add(-time.Second); r.ExpiryTS = &past })
 	deleted := env.addRecording(t)
 	if err := env.mediaStore.DeleteMedia(context.Background(), deleted.RecordingPath); err != nil {
@@ -267,7 +267,7 @@ func TestFrameErrors(t *testing.T) {
 		{"before start", rec.RecordingID, fixtureStart.Add(-time.Nanosecond), "jpeg", "nearest", ErrNotCovered},
 		{"at end", rec.RecordingID, fixtureEnd, "jpeg", "nearest", ErrNotCovered},
 		{"exact missing", rec.RecordingID, frameTS(10).Add(5 * time.Millisecond), "jpeg", "exact", ErrFrameNotFound},
-		{"not ready", recording.RecordingID, fixtureStart, "jpeg", "nearest", ErrNotReady},
+		{"finalizing", recording.RecordingID, fixtureStart, "jpeg", "nearest", ErrNotReady},
 		{"expired", expired.RecordingID, fixtureStart, "jpeg", "nearest", ErrNotFound},
 		{"unknown", uuid.NewString(), fixtureStart, "jpeg", "nearest", ErrNotFound},
 		{"media deleted", deleted.RecordingID, fixtureStart, "jpeg", "nearest", ErrNotFound},
@@ -280,6 +280,27 @@ func TestFrameErrors(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestFrameLiveRecording(t *testing.T) {
+	env := newEnv(t, 0)
+	rec := env.addRecording(t, func(r *model.Recording) { r.State, r.EndTS = "recording", nil })
+
+	requested := frameTS(90).Add(5 * time.Millisecond)
+	media, err := env.svc.Frame(context.Background(), rec.RecordingID, requested, "png", "nearest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !media.Result.StartTS.Equal(frameTS(90)) || media.ExactMatch {
+		t.Fatalf("unexpected live frame result %+v", media.Result)
+	}
+	if got, want := pixels(t, media.Path, ""), referenceFrame(t, env.media, 90); got != want {
+		t.Fatal("live frame pixels differ from frame 90")
+	}
+
+	if _, err := env.svc.Frame(context.Background(), rec.RecordingID, fixtureEnd, "jpeg", "nearest"); !errors.Is(err, ErrNotCovered) {
+		t.Fatalf("frame beyond live coverage: got %v, want ErrNotCovered", err)
 	}
 }
 
@@ -366,6 +387,28 @@ func TestClip(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestClipLiveRecording(t *testing.T) {
+	env := newEnv(t, 0)
+	rec := env.addRecording(t, func(r *model.Recording) { r.State, r.EndTS = "recording", nil })
+	start, duration := frameTS(50), 2*time.Second
+
+	media, err := env.svc.Clip(context.Background(), rec.RecordingID, start, duration, "mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if media.Result.RequestedEndTS == nil || !media.Result.RequestedEndTS.Equal(start.Add(duration)) {
+		t.Fatalf("unexpected live clip result %+v", media.Result)
+	}
+	if got := probeClip(t, media.Path); got.frames == 0 || !got.firstKey {
+		t.Fatalf("live clip has %d frames, first keyframe=%v", got.frames, got.firstKey)
+	}
+
+	lastFrame := frameTS(fixtureFrames - 1)
+	if _, err := env.svc.Clip(context.Background(), rec.RecordingID, start, lastFrame.Sub(start), "mp4"); !errors.Is(err, ErrNotCovered) {
+		t.Fatalf("clip without a frame after its end: got %v, want ErrNotCovered", err)
 	}
 }
 

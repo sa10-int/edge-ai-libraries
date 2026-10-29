@@ -513,7 +513,10 @@ paths:
         - $ref: '#/components/parameters/RecordingId'
         - name: timestamp
           in: query
-          description: The wanted time. Must be RFC 3339 UTC, end in Z, and fall inside the record's covered window [start_ts, end_ts).
+          description: >-
+            The wanted time. Must be RFC 3339 UTC and end in Z. It must fall inside available
+            coverage: [start_ts, end_ts) for a closed record, and no later than the latest
+            available frame for an open record.
           required: true
           schema:
             type: string
@@ -642,7 +645,7 @@ paths:
     get:
       tags: [Retrieval APIs]
       summary: Extracts a clip
-      description: Returns a JSON MediaResult by default. Accept video/mp4 selects MP4 bytes. Errors use JSON. The whole span must be covered; a gap gives 404.
+      description: Returns a JSON MediaResult by default. Accept video/mp4 selects MP4 bytes. Errors use JSON. The whole span must be covered; a gap gives 404. An open record must also have a complete frame after the requested end.
       parameters:
         - $ref: '#/components/parameters/RecordingId'
         - name: start_ts

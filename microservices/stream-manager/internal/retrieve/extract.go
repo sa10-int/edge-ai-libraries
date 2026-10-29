@@ -122,6 +122,22 @@ func (tl *timeline) nearestFrame(ctx context.Context, ts time.Time) (packet, pac
 	return packet{}, packet{}, fmt.Errorf("%w: no frame", ErrBeyondSearchLimit)
 }
 
+// hasFrameAfter reports whether any frame exists strictly after ts within SearchLimit.
+func (tl *timeline) hasFrameAfter(ctx context.Context, ts time.Time) (bool, error) {
+	for _, window := range nearestWindows {
+		packets, err := tl.window(ctx, ts, ts.Add(window))
+		if err != nil {
+			return false, err
+		}
+		for _, p := range packets {
+			if tl.wall(p.PTS).After(ts) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // keyframeAtOrBefore finds the last keyframe at or before ts, first among
 // known packets, then in widening windows up to SearchLimit.
 func (tl *timeline) keyframeAtOrBefore(ctx context.Context, ts time.Time, known []packet) (packet, error) {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (C) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-// Package retrieve cuts frames and clips out of ready recordings.
+// Package retrieve cuts frames and clips out of ready or live recordings.
 package retrieve
 
 import (
@@ -95,11 +95,11 @@ func (s *Service) Frame(ctx context.Context, id string, ts time.Time, format, ma
 	if !ok || format == "mp4" || (match != "nearest" && match != "exact") {
 		return Media{}, ErrInvalidRequest
 	}
-	rec, err := s.readyRecording(ctx, id)
+	rec, err := s.retrievableRecording(ctx, id)
 	if err != nil {
 		return Media{}, err
 	}
-	if ts.Before(rec.StartTS) || !ts.Before(*rec.EndTS) {
+	if ts.Before(rec.StartTS) || (rec.EndTS != nil && !ts.Before(*rec.EndTS)) {
 		return Media{}, ErrNotCovered
 	}
 	release, err := s.acquire()
@@ -117,6 +117,15 @@ func (s *Service) Frame(ctx context.Context, id string, ts time.Time, format, ma
 		return Media{}, err
 	}
 	frameTS := tl.wall(frame.PTS)
+	if rec.State == "recording" {
+		hasLaterFrame, err := tl.hasFrameAfter(ctx, ts)
+		if err != nil {
+			return Media{}, err
+		}
+		if !hasLaterFrame && !frameTS.Equal(ts) {
+			return Media{}, ErrNotCovered
+		}
+	}
 	exact := absDuration(frameTS.Sub(ts)) <= exactTolerance
 	if match == "exact" && !exact {
 		return Media{}, ErrFrameNotFound
@@ -150,12 +159,12 @@ func (s *Service) Clip(ctx context.Context, id string, start time.Time, duration
 	if format != "mp4" || duration <= 0 {
 		return Media{}, ErrInvalidRequest
 	}
-	rec, err := s.readyRecording(ctx, id)
+	rec, err := s.retrievableRecording(ctx, id)
 	if err != nil {
 		return Media{}, err
 	}
 	end := start.Add(duration)
-	if start.Before(rec.StartTS) || end.After(*rec.EndTS) || !end.After(start) {
+	if start.Before(rec.StartTS) || (rec.EndTS != nil && end.After(*rec.EndTS)) || !end.After(start) {
 		return Media{}, ErrNotCovered
 	}
 	release, err := s.acquire()
@@ -168,6 +177,15 @@ func (s *Service) Clip(ctx context.Context, id string, start time.Time, duration
 		return Media{}, err
 	}
 	defer releaseMedia()
+	if rec.State == "recording" {
+		hasLaterFrame, err := tl.hasFrameAfter(ctx, end)
+		if err != nil {
+			return Media{}, err
+		}
+		if !hasLaterFrame {
+			return Media{}, ErrNotCovered
+		}
+	}
 	keyframe, err := tl.keyframeAtOrBefore(ctx, start, nil)
 	if err != nil {
 		return Media{}, err
@@ -226,12 +244,14 @@ func (s *Service) recording(ctx context.Context, id string) (model.Recording, er
 	return rec, nil
 }
 
-func (s *Service) readyRecording(ctx context.Context, id string) (model.Recording, error) {
+func (s *Service) retrievableRecording(ctx context.Context, id string) (model.Recording, error) {
 	rec, err := s.recording(ctx, id)
 	if err != nil {
 		return model.Recording{}, err
 	}
-	if rec.State != "ready" || rec.EndTS == nil {
+	ready := rec.State == "ready" && rec.EndTS != nil
+	live := rec.State == "recording" && rec.EndTS == nil
+	if !ready && !live {
 		return model.Recording{}, ErrNotReady
 	}
 	return rec, nil

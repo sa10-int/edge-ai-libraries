@@ -798,7 +798,9 @@ Content-Type: application/json
 
 ## Retrieval APIs
 
-Extracts media from a `ready` record. Use the `Accept` header to select the response.
+Extracts media from a `ready` record or an open record that is still recording.
+For an open record, requests must fall within the media currently available.
+Use the `Accept` header to select the response.
 
 | `Accept` | Response |
 |---|---|
@@ -818,7 +820,7 @@ The `/media` endpoint serves the file referenced by a JSON response.
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
 | `recording-id` | path | string | yes | The recording, e.g. `rec-2`. |
-| `timestamp` | query | date-time | yes | Time wanted; must fall inside `[start_ts, end_ts)`. |
+| `timestamp` | query | date-time | yes | Time wanted; must fall inside available coverage. For a closed record this is `[start_ts, end_ts)`; for an open record it cannot be later than the latest available frame. |
 | `format` | query | string | no | Optional image format: `jpeg` or `png`. JSON links default to JPEG. For binary responses, `Accept` selects the format when this parameter is absent. A conflict with an explicit format returns `406`. |
 | `match` | query | string | no | `nearest` (default, ties go to the earlier frame) or `exact` (404 if nothing sits exactly on that time). |
 
@@ -869,7 +871,7 @@ X-Exact-Match: false
 | 400 | `invalid_request` | Unsupported `format` or `match`. |
 | 404 | `recording_not_found` / `frame_not_found` | Recording not found, timestamp outside coverage, exact frame missing, or no decodable frame available for the requested time. |
 | 406 | `not_acceptable` | Incompatible `Accept` header. |
-| 409 | `record_not_ready` | Record not ready. |
+| 409 | `record_not_ready` | Record is finalizing, failed, or otherwise unavailable for retrieval. |
 | 429 | `capacity_exhausted` | Extraction capacity reached. |
 | 507 | `storage_full` | The recording storage quota is reached. Delete recordings to free space. |
 | 503 | `storage_unavailable` | Extraction or storage failure. |
@@ -879,6 +881,7 @@ X-Exact-Match: false
 `GET /retrieve/{recording-id}/clip`
 
 The whole requested span must be covered by the recording; a gap returns `404`.
+For an open record, a complete frame after the requested end must also be available.
 
 | Parameter | In | Type | Required | Description |
 |---|---|---|---|---|
@@ -925,7 +928,7 @@ curl -i "http://localhost:8080/v1/retrieve/rec-2/clip?start_ts=2026-09-16T09:12:
 | 400 | `invalid_request` | Missing or invalid `duration`, or unsupported `format`. |
 | 404 | `recording_not_found` / `clip_not_found` | Recording not found, the requested interval is not fully covered, or no clip available for the requested interval. |
 | 406 | `not_acceptable` | Incompatible `Accept` header. |
-| 409 | `record_not_ready` | Record not ready. |
+| 409 | `record_not_ready` | Record is finalizing, failed, or otherwise unavailable for retrieval. |
 | 429 | `capacity_exhausted` | Extraction capacity reached. |
 | 507 | `storage_full` | The recording storage quota is reached. Delete recordings to free space. |
 | 503 | `storage_unavailable` | Extraction or storage failure. |
