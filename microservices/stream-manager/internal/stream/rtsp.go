@@ -212,7 +212,10 @@ func openRTSP(ctx context.Context, sourceURI string, onFrame func(bool)) (_ *rts
 	if err != nil {
 		return nil, ErrUnsupportedSource
 	}
-	s.relay, err = newVideoRelay(codec.local, func() { s.fail("FFmpeg relay disconnected") })
+	s.relay, err = newVideoRelay(codec.local, func() { s.fail("FFmpeg relay disconnected") }, func(err error) {
+		onFrame(true)
+		s.fail(fmt.Sprintf("FFmpeg relay dropped video packets: %v", err))
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -362,15 +365,16 @@ type videoRelay struct {
 	playConn        *gortsplib.ServerConn
 	playCSeq        string
 	onClosed        func()
+	onWriteError    func(error)
 }
 
-func newVideoRelay(codec format.Format, onClosed func()) (*videoRelay, error) {
+func newVideoRelay(codec format.Format, onClosed func(), onWriteError func(error)) (*videoRelay, error) {
 	relayUUID, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
 	}
 	r := &videoRelay{
-		path: "/" + base64.RawURLEncoding.EncodeToString(relayUUID[:]), onClosed: onClosed,
+		path: "/" + base64.RawURLEncoding.EncodeToString(relayUUID[:]), onClosed: onClosed, onWriteError: onWriteError,
 		timestampOrigin: binary.BigEndian.Uint32(relayUUID[:4]) | 1,
 		media:           &description.Media{Type: description.MediaTypeVideo, Formats: []format.Format{codec}},
 	}
@@ -445,6 +449,11 @@ func (r *videoRelay) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCt
 	if matched {
 		r.onClosed()
 	}
+}
+
+// OnStreamWriteError reports packets that could not be queued for FFmpeg.
+func (r *videoRelay) OnStreamWriteError(ctx *gortsplib.ServerHandlerOnStreamWriteErrorCtx) {
+	r.onWriteError(ctx.Error)
 }
 
 func (r *videoRelay) close() {

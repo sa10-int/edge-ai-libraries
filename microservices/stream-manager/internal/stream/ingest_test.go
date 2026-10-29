@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +31,9 @@ import (
 )
 
 func TestRelayDescription(t *testing.T) {
-	relay, err := newVideoRelay(&format.H264{PayloadTyp: 96, PacketizationMode: 1}, func() {})
+	relay, err := newVideoRelay(&format.H264{PayloadTyp: 96, PacketizationMode: 1}, func() {}, func(err error) {
+		t.Errorf("unexpected relay write failure: %v", err)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +64,41 @@ func TestRelayDescription(t *testing.T) {
 	}
 	if len(desc.Medias) != 1 {
 		t.Fatalf("unexpected relay description: %+v", desc)
+	}
+}
+
+func TestRelayWriteErrorFailsInput(t *testing.T) {
+	source, _ := testPublisher(t, "h264", true)
+	var dropped atomic.Int64
+	input, err := openRTSP(context.Background(), source, func(lost bool) {
+		if lost {
+			dropped.Add(1)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.close()
+
+	var handler gortsplib.ServerHandlerOnStreamWriteError = input.relay
+	writeErr := errors.New("write queue is full")
+	handler.OnStreamWriteError(&gortsplib.ServerHandlerOnStreamWriteErrorCtx{Error: writeErr})
+	if !input.failed.Load() || dropped.Load() != 1 {
+		t.Fatalf("relay write error: failed=%v, dropped=%d", input.failed.Load(), dropped.Load())
+	}
+	select {
+	case err := <-input.failures:
+		if !errors.Is(err, ErrSourceFailed) || !strings.Contains(err.Error(), "FFmpeg relay dropped video packets: "+writeErr.Error()) {
+			t.Fatalf("unexpected failure: %v", err)
+		}
+	default:
+		t.Fatal("relay write error did not report an ingest failure")
+	}
+	handler.OnStreamWriteError(&gortsplib.ServerHandlerOnStreamWriteErrorCtx{Error: writeErr})
+	select {
+	case err := <-input.failures:
+		t.Fatalf("repeated relay write error reported another failure: %v", err)
+	default:
 	}
 }
 
@@ -158,7 +196,9 @@ func testPublisherPackets(t *testing.T, packets []fixturePacket, adapter *videoC
 		t.Fatal(err)
 	}
 	adapter.frozen = true
-	relay, err := newVideoRelay(adapter.local, func() {})
+	relay, err := newVideoRelay(adapter.local, func() {}, func(err error) {
+		t.Errorf("test publisher dropped video packets: %v", err)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
